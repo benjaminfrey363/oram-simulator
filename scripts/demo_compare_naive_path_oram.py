@@ -73,7 +73,7 @@ def compare_workload(name: str, logical_pattern: list[int]) -> None:
     print(format_summary(naive.summary))
     print()
 
-    print("PathORAM bucket-trace summary:")
+    print("PathORAM bucket-index trtrace summary:")
     print(format_summary(path_oram.summary))
     print()
 
@@ -85,7 +85,7 @@ def compare_workload(name: str, logical_pattern: list[int]) -> None:
     print(format_repeat_comparison(path_oram_repeat_comparison))
     print()
 
-    print("PathORAM server-visible trace, grouped by logical access:")
+    print("PathORAM server-visible bucket-index trace, grouped by logical access:")
     print_path_oram_grouped_trace(path_oram)
     print()
 
