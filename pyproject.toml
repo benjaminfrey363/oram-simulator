@@ -1,0 +1,8 @@
+[project]
+name = "oram-simulator"
+version = "0.1.0"
+description = "A small ORAM simulator for studying access-pattern leakage."
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
