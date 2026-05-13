@@ -3,6 +3,7 @@ from oram_sim.access_patterns import (
     repeated_pattern,
     sequential_pattern,
 )
+from oram_sim.analysis import format_summary, summarize_access_trace
 from oram_sim.storage import NaiveStorage
 
 
@@ -12,9 +13,13 @@ def run_pattern(name: str, pattern: list[int]) -> None:
     for logical_id in pattern:
         storage.read(logical_id)
 
+    summary = summarize_access_trace(storage.trace)
+
     print(f"{name}:")
     print(f"  logical pattern:  {pattern}")
     print(f"  physical trace:   {storage.trace.physical_addresses()}")
+    print()
+    print(format_summary(summary))
     print()
 
 
