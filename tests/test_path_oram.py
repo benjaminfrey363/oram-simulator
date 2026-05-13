@@ -93,4 +93,85 @@ def test_rejects_invalid_bucket_capacity() -> None:
 def test_rejects_invalid_height() -> None:
     with pytest.raises(ValueError):
         PathORAM(["a"], bucket_capacity=1, height=-1)
-        
+
+
+def test_read_returns_correct_value() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    assert oram.read(2) == "c"
+
+
+def test_read_preserves_invariant() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    oram.read(2)
+
+    assert oram.check_invariant()
+
+
+def test_repeated_reads_return_correct_value() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    assert oram.read(2) == "c"
+    assert oram.read(2) == "c"
+    assert oram.read(2) == "c"
+
+    assert oram.check_invariant()
+
+
+def test_write_updates_value() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    oram.write(1, "new-b")
+
+    assert oram.read(1) == "new-b"
+    assert oram.check_invariant()
+
+
+def test_multiple_writes_and_reads() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    oram.write(0, "new-a")
+    oram.write(3, "new-d")
+
+    assert oram.read(0) == "new-a"
+    assert oram.read(1) == "b"
+    assert oram.read(2) == "c"
+    assert oram.read(3) == "new-d"
+
+    assert oram.check_invariant()
+
+
+def test_access_records_read_and_write_path() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    old_leaf = oram.position_map.get_leaf(2)
+    expected_path = oram.server.path_bucket_indices(old_leaf)
+
+    oram.read(2)
+
+    assert oram.physical_trace() == expected_path + expected_path
+
+
+def test_clear_physical_trace_after_access() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    oram.read(2)
+    oram.clear_physical_trace()
+
+    assert oram.physical_trace() == []
+
+
+def test_access_works_when_target_starts_in_stash() -> None:
+    oram = PathORAM(
+        ["a", "b"],
+        bucket_capacity=1,
+        height=0,
+        seed=0,
+    )
+
+    assert len(oram.stash_blocks()) == 1
+
+    assert oram.read(1) == "b"
+    assert oram.check_invariant()
+

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, cast
 
 from oram_sim.block import Block
 from oram_sim.position_map import PositionMap
@@ -13,19 +13,24 @@ from oram_sim.tree import BinaryTreeServer, BucketFullError
 T = TypeVar("T")
 
 
+_NO_WRITE = object()
+
+
 class PathORAM(Generic[T]):
     """
-    A first Path ORAM wrapper.
+    A small Path ORAM simulator.
 
-    This version only implements initialization.
+    This version supports initialization, read, and write.
 
-    It creates:
-        - a binary tree server,
-        - a private position map,
-        - a private stash,
-        - one Block per logical item.
+    It models the main Path ORAM flow:
+        - private position map,
+        - private stash,
+        - server-side binary tree,
+        - path read,
+        - remapping,
+        - path write-back.
 
-    Full read/write access will be implemented in the next steps.
+    It does not yet model encryption or dummy blocks.
     """
 
     def __init__(
@@ -73,6 +78,25 @@ class PathORAM(Generic[T]):
     @property
     def num_buckets(self) -> int:
         return self.server.num_buckets
+
+    def read(self, logical_id: int) -> T:
+        """
+        Read a logical block.
+
+        Even for a read, Path ORAM remaps the block and rewrites a path.
+        This is what prevents repeated reads from producing the same obvious
+        physical access pattern.
+        """
+        return self._access(logical_id, new_value=_NO_WRITE)
+
+    def write(self, logical_id: int, value: T) -> None:
+        """
+        Write a logical block.
+
+        This performs the same ORAM access procedure as read, but replaces the
+        target block's value before writing back.
+        """
+        self._access(logical_id, new_value=value)
 
     def position_entries(self) -> dict[int, int]:
         """
@@ -151,6 +175,82 @@ class PathORAM(Generic[T]):
     def clear_physical_trace(self) -> None:
         self.server.clear_trace()
 
+    def _access(self, logical_id: int, new_value: object) -> T:
+        """
+        Core Path ORAM access operation.
+
+        The server-visible part is:
+            read old path
+            write old path
+
+        The private client-side part is:
+            use position map
+            update stash
+            remap target block
+        """
+        old_leaf = self.position_map.get_leaf(logical_id)
+        new_leaf = self.position_map.remap(logical_id)
+
+        path_blocks = self.server.read_path_blocks(old_leaf)
+        self.stash.add_many(path_blocks)
+
+        target_block = self.stash.require(logical_id)
+        old_value = target_block.value
+
+        updated_block = target_block.with_leaf(new_leaf)
+
+        if new_value is not _NO_WRITE:
+            updated_block = updated_block.with_value(cast(T, new_value))
+
+        self.stash.put(updated_block)
+
+        self._evict_to_path(old_leaf)
+
+        return old_value
+
+    def _evict_to_path(self, leaf: int) -> None:
+        """
+        Greedily evict stash blocks back onto the path to leaf.
+
+        We process the path from leaf to root. At each bucket, we place up to
+        bucket_capacity blocks whose assigned leaf path contains that bucket.
+
+        This tries to push blocks as deep as possible.
+        """
+        path = self.server.path_bucket_indices(leaf)
+        new_path_buckets: dict[int, list[Block[T]]] = {
+            bucket_index: []
+            for bucket_index in path
+        }
+
+        for bucket_index in reversed(path):
+            eligible_blocks = [
+                block
+                for block in self.stash.blocks()
+                if self._bucket_can_hold_block(bucket_index, block)
+            ]
+
+            eligible_blocks.sort(key=lambda block: block.logical_id)
+
+            selected_blocks = eligible_blocks[: self.bucket_capacity]
+
+            for block in selected_blocks:
+                self.stash.remove(block.logical_id)
+
+            new_path_buckets[bucket_index] = selected_blocks
+
+        self.server.write_path(
+            leaf,
+            [new_path_buckets[bucket_index] for bucket_index in path],
+        )
+
+    def _bucket_can_hold_block(self, bucket_index: int, block: Block[T]) -> bool:
+        """
+        A bucket can hold a block if the bucket lies on the path to the block's
+        assigned leaf.
+        """
+        return bucket_index in self.server.path_bucket_indices(block.leaf)
+
     def _initialize_blocks(self, initial_values: Sequence[T]) -> None:
         for logical_id, value in enumerate(initial_values):
             leaf = self.position_map.get_leaf(logical_id)
@@ -181,8 +281,6 @@ class PathORAM(Generic[T]):
                     self.server.place_block(bucket_index, block)
                     return True
                 except BucketFullError:
-                    # This should not happen because of the length check,
-                    # but keeping the guard makes the method robust.
                     continue
 
         return False
