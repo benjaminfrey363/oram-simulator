@@ -1,5 +1,9 @@
 from oram_sim.access_patterns import hotspot_pattern, repeated_pattern
-from oram_sim.analysis import format_summary
+from oram_sim.analysis import (
+    compare_adjacent_repeats,
+    format_repeat_comparison,
+    format_summary,
+)
 from oram_sim.experiments import (
     PathORAMWorkloadResult,
     run_naive_read_workload,
@@ -38,6 +42,16 @@ def compare_workload(name: str, logical_pattern: list[int]) -> None:
         seed=0,
     )
 
+    naive_repeat_comparison = compare_adjacent_repeats(
+        logical_sequence=logical_pattern,
+        observed_sequence=naive.physical_trace,
+    )
+
+    path_oram_repeat_comparison = compare_adjacent_repeats(
+        logical_sequence=logical_pattern,
+        observed_sequence=path_oram.observed_leaves,
+    )
+
     print("=" * 72)
     print(name)
     print("=" * 72)
@@ -55,12 +69,20 @@ def compare_workload(name: str, logical_pattern: list[int]) -> None:
     print(path_oram.observed_leaves)
     print()
 
-    print("NaiveStorage leakage summary:")
+    print("NaiveStorage trace summary:")
     print(format_summary(naive.summary))
     print()
 
     print("PathORAM bucket-trace summary:")
     print(format_summary(path_oram.summary))
+    print()
+
+    print("NaiveStorage adjacent-repeat comparison:")
+    print(format_repeat_comparison(naive_repeat_comparison))
+    print()
+
+    print("PathORAM adjacent-repeat comparison:")
+    print(format_repeat_comparison(path_oram_repeat_comparison))
     print()
 
     print("PathORAM server-visible trace, grouped by logical access:")
@@ -91,4 +113,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-    

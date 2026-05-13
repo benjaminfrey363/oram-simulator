@@ -93,3 +93,160 @@ def format_summary(summary: TraceSummary) -> str:
             f"repeat rate:             {summary.repeat_rate:.2%}",
         ]
     )
+
+@dataclass(frozen=True)
+class AdjacentRepeatComparison:
+    """
+    Compare adjacent-repeat structure between a logical pattern and an observed trace.
+
+    We are not asking whether the numbers are equal.
+
+    For Path ORAM, comparing logical block id 3 to observed leaf 3 is not
+    meaningful. Instead, we ask whether repetitions are preserved:
+
+        logical[i] == logical[i - 1]
+        observed[i] == observed[i - 1]
+    """
+
+    length: int
+    transition_count: int
+
+    logical_repeat_count: int
+    observed_repeat_count: int
+
+    agreement_count: int
+    agreement_rate: float
+
+    logical_repeats_visible_count: int
+    logical_repeats_visible_rate: float
+
+    observed_repeats_without_logical_repeat_count: int
+    observed_repeats_without_logical_repeat_rate: float
+
+
+def adjacent_repeat_flags(sequence: Sequence[object]) -> list[bool]:
+    """
+    Return the adjacent-repeat pattern of a sequence.
+
+    Example:
+        [3, 3, 2, 2, 5]
+    gives:
+        [True, False, True, False]
+    """
+    return [
+        sequence[i] == sequence[i - 1]
+        for i in range(1, len(sequence))
+    ]
+
+
+def compare_adjacent_repeats(
+    logical_sequence: Sequence[object],
+    observed_sequence: Sequence[object],
+) -> AdjacentRepeatComparison:
+    """
+    Compare whether adjacent repetitions in the logical workload remain visible
+    in the observed trace.
+
+    This is useful for comparing:
+
+        logical workload vs naive physical addresses
+        logical workload vs Path ORAM observed leaves
+
+    The sequences must have the same length. For Path ORAM, use the observed
+    leaf per logical access, not the full bucket trace.
+    """
+    if len(logical_sequence) != len(observed_sequence):
+        raise ValueError(
+            "logical_sequence and observed_sequence must have the same length"
+        )
+
+    length = len(logical_sequence)
+    transition_count = max(0, length - 1)
+
+    logical_flags = adjacent_repeat_flags(logical_sequence)
+    observed_flags = adjacent_repeat_flags(observed_sequence)
+
+    logical_repeat_count = sum(logical_flags)
+    observed_repeat_count = sum(observed_flags)
+
+    agreement_count = sum(
+        logical_repeat == observed_repeat
+        for logical_repeat, observed_repeat in zip(logical_flags, observed_flags)
+    )
+
+    agreement_rate = (
+        agreement_count / transition_count
+        if transition_count > 0
+        else 0.0
+    )
+
+    logical_repeats_visible_count = sum(
+        logical_repeat and observed_repeat
+        for logical_repeat, observed_repeat in zip(logical_flags, observed_flags)
+    )
+
+    logical_repeats_visible_rate = (
+        logical_repeats_visible_count / logical_repeat_count
+        if logical_repeat_count > 0
+        else 0.0
+    )
+
+    logical_change_count = transition_count - logical_repeat_count
+
+    observed_repeats_without_logical_repeat_count = sum(
+        (not logical_repeat) and observed_repeat
+        for logical_repeat, observed_repeat in zip(logical_flags, observed_flags)
+    )
+
+    observed_repeats_without_logical_repeat_rate = (
+        observed_repeats_without_logical_repeat_count / logical_change_count
+        if logical_change_count > 0
+        else 0.0
+    )
+
+    return AdjacentRepeatComparison(
+        length=length,
+        transition_count=transition_count,
+        logical_repeat_count=logical_repeat_count,
+        observed_repeat_count=observed_repeat_count,
+        agreement_count=agreement_count,
+        agreement_rate=agreement_rate,
+        logical_repeats_visible_count=logical_repeats_visible_count,
+        logical_repeats_visible_rate=logical_repeats_visible_rate,
+        observed_repeats_without_logical_repeat_count=(
+            observed_repeats_without_logical_repeat_count
+        ),
+        observed_repeats_without_logical_repeat_rate=(
+            observed_repeats_without_logical_repeat_rate
+        ),
+    )
+
+
+def format_repeat_comparison(comparison: AdjacentRepeatComparison) -> str:
+    """
+    Format adjacent-repeat comparison results for demos.
+    """
+    return "\n".join(
+        [
+            f"length:                                {comparison.length}",
+            f"adjacent transitions:                  {comparison.transition_count}",
+            f"logical adjacent repeats:              {comparison.logical_repeat_count}",
+            f"observed adjacent repeats:             {comparison.observed_repeat_count}",
+            (
+                "repeat/change agreement:              "
+                f"{comparison.agreement_count}/{comparison.transition_count} "
+                f"({comparison.agreement_rate:.2%})"
+            ),
+            (
+                "logical repeats still visible:         "
+                f"{comparison.logical_repeats_visible_count}/"
+                f"{comparison.logical_repeat_count} "
+                f"({comparison.logical_repeats_visible_rate:.2%})"
+            ),
+            (
+                "observed repeats without logical repeat: "
+                f"{comparison.observed_repeats_without_logical_repeat_count} "
+                f"({comparison.observed_repeats_without_logical_repeat_rate:.2%})"
+            ),
+        ]
+    )
