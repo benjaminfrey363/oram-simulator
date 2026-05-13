@@ -14,10 +14,12 @@ def print_path_oram_grouped_trace(result: PathORAMWorkloadResult) -> None:
         group = result.grouped_trace[index]
         read_path = group[:half]
         write_path = group[half:]
+        observed_leaf = result.observed_leaves[index]
 
         print(f"  logical access {index}: read block {logical_id}")
-        print(f"    server sees read path:  {read_path}")
-        print(f"    server sees write path: {write_path}")
+        print(f"    server observes leaf:       {observed_leaf}")
+        print(f"    server sees read path:      {read_path}")
+        print(f"    server sees write path:     {write_path}")
 
 
 def compare_workload(name: str, logical_pattern: list[int]) -> None:
@@ -45,16 +47,24 @@ def compare_workload(name: str, logical_pattern: list[int]) -> None:
     print(logical_pattern)
     print()
 
-    print("NaiveStorage server-visible trace:")
+    print("NaiveStorage observed physical addresses:")
     print(naive.physical_trace)
     print()
+
+    print("PathORAM observed leaves:")
+    print(path_oram.observed_leaves)
+    print()
+
+    print("NaiveStorage leakage summary:")
     print(format_summary(naive.summary))
+    print()
+
+    print("PathORAM bucket-trace summary:")
+    print(format_summary(path_oram.summary))
     print()
 
     print("PathORAM server-visible trace, grouped by logical access:")
     print_path_oram_grouped_trace(path_oram)
-    print()
-    print(format_summary(path_oram.summary))
     print()
 
     print(f"Path ORAM invariant holds? {path_oram.invariant_holds}")
