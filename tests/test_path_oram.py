@@ -1,6 +1,7 @@
 import pytest
 
 from oram_sim.path_oram import PathORAM
+from oram_sim.block import Block, DummyBlock
 
 
 def test_path_oram_initializes_basic_parameters() -> None:
@@ -175,3 +176,46 @@ def test_access_works_when_target_starts_in_stash() -> None:
     assert oram.read(1) == "b"
     assert oram.check_invariant()
 
+def test_server_bucket_view_is_padded_to_bucket_capacity() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=3, seed=0)
+
+    for bucket_index in range(1, oram.num_buckets + 1):
+        visible_bucket = oram.server_bucket_view(bucket_index)
+
+        assert len(visible_bucket) == 3
+        assert all(isinstance(block, (Block, DummyBlock)) for block in visible_bucket)
+
+
+def test_server_snapshot_padded_includes_all_buckets() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    padded_snapshot = oram.server_snapshot_padded()
+
+    assert set(padded_snapshot.keys()) == set(range(1, oram.num_buckets + 1))
+    assert all(len(bucket) == 2 for bucket in padded_snapshot.values())
+
+
+def test_server_snapshot_padded_contains_dummy_blocks_for_empty_space() -> None:
+    oram = PathORAM(["a"], bucket_capacity=3, height=1, seed=0)
+
+    padded_snapshot = oram.server_snapshot_padded()
+
+    all_visible_blocks = [
+        block
+        for bucket in padded_snapshot.values()
+        for block in bucket
+    ]
+
+    assert any(isinstance(block, DummyBlock) for block in all_visible_blocks)
+
+
+def test_visible_path_returns_padded_buckets() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, height=2, seed=0)
+
+    visible_path = oram.visible_path(leaf=3)
+
+    # Height 2 means a path has root, internal node, leaf: 3 buckets.
+    assert len(visible_path) == 3
+
+    # Each bucket is padded to capacity 2.
+    assert all(len(bucket) == 2 for bucket in visible_path)

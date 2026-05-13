@@ -1,6 +1,6 @@
 import pytest
 
-from oram_sim.block import Block
+from oram_sim.block import Block, DummyBlock
 
 
 def test_block_stores_fields() -> None:
@@ -43,4 +43,14 @@ def test_block_rejects_negative_logical_id() -> None:
 def test_block_rejects_negative_leaf() -> None:
     with pytest.raises(ValueError):
         Block(logical_id=0, value="bad", leaf=-1)
+
+def test_dummy_block_stores_id() -> None:
+    dummy = DummyBlock(dummy_id=5)
+
+    assert dummy.dummy_id == 5
+
+
+def test_dummy_block_rejects_negative_id() -> None:
+    with pytest.raises(ValueError):
+        DummyBlock(dummy_id=-1)
         

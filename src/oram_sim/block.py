@@ -54,4 +54,20 @@ class Block(Generic[T]):
             value=self.value,
             leaf=leaf,
         )
-    
+
+
+@dataclass(frozen=True)
+class DummyBlock:
+    """
+    A dummy block used to pad server-visible buckets.
+
+    In a real ORAM implementation, dummy blocks would be encrypted and
+    indistinguishable from real blocks to the server. Here they are explicit
+    because this is a simulator.
+    """
+
+    dummy_id: int
+
+    def __post_init__(self) -> None:
+        if self.dummy_id < 0:
+            raise ValueError("dummy_id must be nonnegative")

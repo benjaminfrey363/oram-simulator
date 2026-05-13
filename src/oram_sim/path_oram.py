@@ -4,7 +4,7 @@ import math
 from collections.abc import Sequence
 from typing import Generic, TypeVar, cast
 
-from oram_sim.block import Block
+from oram_sim.block import Block, DummyBlock
 from oram_sim.position_map import PositionMap
 from oram_sim.stash import Stash
 from oram_sim.tree import BinaryTreeServer, BucketFullError
@@ -127,6 +127,61 @@ class PathORAM(Generic[T]):
                 snapshot[bucket_index] = blocks
 
         return snapshot
+    
+    def server_bucket_view(self, bucket_index: int) -> list[Block[T] | DummyBlock]:
+        """
+        Return the server-visible padded view of one bucket.
+
+        Internally, our simulator stores only real blocks in each bucket.
+        But in Path ORAM, the server should see every bucket as having fixed
+        size. We model that by padding with DummyBlock objects.
+        """
+        real_blocks = self.server.bucket_blocks(bucket_index)
+
+        if len(real_blocks) > self.bucket_capacity:
+            raise RuntimeError(
+                f"bucket {bucket_index} exceeds capacity {self.bucket_capacity}"
+            )
+
+        visible_blocks: list[Block[T] | DummyBlock] = list(real_blocks)
+
+        while len(visible_blocks) < self.bucket_capacity:
+            dummy_id = self._dummy_id(bucket_index, len(visible_blocks))
+            visible_blocks.append(DummyBlock(dummy_id=dummy_id))
+
+        return visible_blocks
+
+    def server_snapshot_padded(self) -> dict[int, list[Block[T] | DummyBlock]]:
+        """
+        Return the server-visible padded view of every bucket.
+
+        Unlike server_snapshot(), this includes empty buckets and pads every
+        bucket to bucket_capacity using dummy blocks.
+        """
+        return {
+            bucket_index: self.server_bucket_view(bucket_index)
+            for bucket_index in range(1, self.server.num_buckets + 1)
+        }
+
+    def visible_path(self, leaf: int) -> list[list[Block[T] | DummyBlock]]:
+        """
+        Return the padded server-visible buckets on a root-to-leaf path.
+
+        This is useful for demos. It does not itself perform an ORAM access.
+        """
+        return [
+            self.server_bucket_view(bucket_index)
+            for bucket_index in self.server.path_bucket_indices(leaf)
+        ]
+
+    def _dummy_id(self, bucket_index: int, slot_index: int) -> int:
+        """
+        Deterministically generate a dummy id for a bucket slot.
+
+        The exact dummy id has no security meaning. It is just useful for
+        readable demos and reproducible tests.
+        """
+        return bucket_index * self.bucket_capacity + slot_index
 
     def all_blocks(self) -> list[Block[T]]:
         """
