@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeVar, cast
+from typing import Generic, TypeVar, cast
+
+from oram_sim.snapshot import AccessPhase, AccessSnapshot, ORAMStateSnapshot
 
 from oram_sim.block import Block, DummyBlock
 from oram_sim.position_map import PositionMap
@@ -123,6 +125,65 @@ class PathORAM(Generic[T]):
         left in an intermediate state.
         """
         yield from self._access_steps(logical_id, new_value=value)
+
+    def state_snapshot(
+        self,
+        highlighted_buckets: Iterable[int] | None = None,
+    ) -> ORAMStateSnapshot[T]:
+        """
+        Capture the current ORAM state.
+
+        This snapshot is designed for visualization. The tree is represented
+        using padded server-visible buckets, while the stash and position map
+        are private client-side state.
+
+        During intermediate debug phases, invariant_holds may be False because
+        path blocks have been copied into the stash before the server path has
+        been rewritten.
+        """
+        highlighted = frozenset(highlighted_buckets or [])
+
+        tree = {
+            bucket_index: tuple(self.server_bucket_view(bucket_index))
+            for bucket_index in range(1, self.server.num_buckets + 1)
+        }
+
+        return ORAMStateSnapshot(
+            height=self.height,
+            bucket_capacity=self.bucket_capacity,
+            tree=tree,
+            position_map=self.position_entries(),
+            stash=tuple(self.stash.blocks()),
+            physical_trace=tuple(self.physical_trace()),
+            highlighted_buckets=highlighted,
+            invariant_holds=self.check_invariant(),
+        )
+
+    def read_snapshots(self, logical_id: int) -> Iterator[AccessSnapshot[T]]:
+        """
+        Debugging/visualization version of read().
+
+        This yields captured snapshots after each phase of the access. The
+        caller should consume the generator to completion; otherwise the ORAM
+        may be left in an intermediate state.
+        """
+        for step in self.read_steps(logical_id):
+            yield self._snapshot_from_step(step)
+
+    def write_snapshots(
+        self,
+        logical_id: int,
+        value: T,
+    ) -> Iterator[AccessSnapshot[T]]:
+        """
+        Debugging/visualization version of write().
+
+        This yields captured snapshots after each phase of the access. The
+        caller should consume the generator to completion; otherwise the ORAM
+        may be left in an intermediate state.
+        """
+        for step in self.write_steps(logical_id, value):
+            yield self._snapshot_from_step(step)
 
     def position_entries(self) -> dict[int, int]:
         """
@@ -363,6 +424,17 @@ class PathORAM(Generic[T]):
             physical_trace=self.physical_trace(),
         )
 
+    def _snapshot_from_step(self, step: AccessStep[T]) -> AccessSnapshot[T]:
+        return AccessSnapshot(
+            phase=step.phase,
+            logical_id=step.logical_id,
+            old_leaf=step.old_leaf,
+            new_leaf=step.new_leaf,
+            path=tuple(step.path),
+            read_value=step.read_value,
+            state=self.state_snapshot(highlighted_buckets=step.path),
+        )
+
     def _evict_to_path(self, leaf: int) -> None:
         """
         Greedily evict stash blocks back onto the path to leaf.
@@ -452,14 +524,7 @@ class PathORAM(Generic[T]):
 
         return math.ceil(math.log2(n_blocks))
     
-    
 
-AccessPhase = Literal[
-    "before_access",
-    "after_path_read",
-    "after_remap",
-    "after_eviction",
-]
 
 
 @dataclass(frozen=True)

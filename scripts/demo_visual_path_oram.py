@@ -1,8 +1,8 @@
 from oram_sim.access_patterns import repeated_pattern
 from oram_sim.path_oram import PathORAM
 from oram_sim.visualization import (
-    format_access_step,
-    format_full_state,
+    format_access_snapshot,
+    format_state_snapshot,
 )
 
 
@@ -32,36 +32,30 @@ def main() -> None:
 
     print("Initial ORAM state")
     print_separator()
-    print(format_full_state(oram, show_values=False))
+    print(format_state_snapshot(oram.state_snapshot(), show_values=False))
 
     for query_index, logical_id in enumerate(workload, start=1):
         print_separator()
         print(f"Query {query_index}: read logical block {logical_id}")
 
-        last_step = None
+        last_snapshot = None
 
-        for step in oram.read_steps(logical_id):
-            last_step = step
+        for snapshot in oram.read_snapshots(logical_id):
+            last_snapshot = snapshot
 
-            print_phase_header(format_access_step(step))
+            print_phase_header(format_access_snapshot(snapshot))
+            print(format_state_snapshot(snapshot.state, show_values=False))
 
-            print(
-                format_full_state(
-                    oram,
-                    highlighted_leaf=step.old_leaf,
-                    show_values=False,
-                )
-            )
-
-            if step.phase == "after_path_read":
+            if snapshot.phase == "after_path_read":
                 print()
                 print(
                     "Note: this is an intermediate debugging state. "
                     "The old path has been copied into the private stash, "
-                    "but the server path has not yet been rewritten."
+                    "but the server path has not yet been rewritten. "
+                    "So the placement invariant is temporarily false."
                 )
 
-            if step.phase == "after_remap":
+            if snapshot.phase == "after_remap":
                 print()
                 print(
                     "Note: the target block in the stash now has its new assigned leaf. "
@@ -70,8 +64,9 @@ def main() -> None:
 
         print()
         print(f"Query {query_index} complete.")
-        if last_step is not None:
-            print(f"Read value: {last_step.read_value}")
+
+        if last_snapshot is not None:
+            print(f"Read value: {last_snapshot.read_value}")
 
 
 if __name__ == "__main__":

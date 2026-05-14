@@ -8,7 +8,10 @@ from oram_sim.visualization import (
     format_tree,
     format_tree_with_highlighted_path,
     format_visible_block,
-    format_access_step
+    format_access_step,
+    format_access_snapshot,
+    format_state_snapshot,
+    format_tree_snapshot
 )
 
 
@@ -120,4 +123,42 @@ def test_format_access_step() -> None:
     assert "logical block: 2" in text
     assert "old leaf:" in text
     assert "touched path:" in text
-    
+
+def test_format_tree_snapshot() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, height=2, seed=0)
+
+    snapshot = oram.state_snapshot(highlighted_buckets=[1, 3, 7])
+
+    text = format_tree_snapshot(snapshot)
+
+    assert "depth 0:" in text
+    assert "depth 1:" in text
+    assert "depth 2:" in text
+    assert "*[1:" in text
+    assert "*[3:" in text
+    assert "*[7:" in text
+
+
+def test_format_state_snapshot() -> None:
+    oram = PathORAM(["a", "b"], bucket_capacity=2, height=1, seed=0)
+
+    snapshot = oram.state_snapshot()
+
+    text = format_state_snapshot(snapshot)
+
+    assert "private position map:" in text
+    assert "private stash:" in text
+    assert "placement invariant holds:" in text
+
+
+def test_format_access_snapshot() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, height=2, seed=0)
+
+    snapshot = next(oram.read_snapshots(2))
+
+    text = format_access_snapshot(snapshot)
+
+    assert "Before access" in text
+    assert "logical block: 2" in text
+    assert "old leaf:" in text
+    assert "touched path:" in text
