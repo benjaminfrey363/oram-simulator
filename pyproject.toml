@@ -11,4 +11,5 @@ pythonpath = ["src"]
 viz = [
     "graphviz>=0.20",
     "matplotlib>=3.8",
+    "rich>=13.0",
 ]
