@@ -8,4 +8,7 @@ requires-python = ">=3.10"
 pythonpath = ["src"]
 
 [project.optional-dependencies]
-viz = ["graphviz>=0.20"]
+viz = [
+    "graphviz>=0.20",
+    "matplotlib>=3.8",
+]

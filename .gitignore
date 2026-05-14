@@ -17,6 +17,7 @@ dist/
 
 # Generated ORAM visualization outputs
 snapshots/
+plots/
 *.dot
 *.svg
 *.png
