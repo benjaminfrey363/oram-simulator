@@ -3,3 +3,4 @@ Name: oram-simulator
 Version: 0.1.0
 Summary: A small ORAM simulator for studying access-pattern leakage.
 Requires-Python: >=3.10
+Provides-Extra: viz

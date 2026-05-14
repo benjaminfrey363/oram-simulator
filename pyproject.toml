@@ -1,11 +1,12 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "oram-simulator"
 version = "0.1.0"
 description = "A small ORAM simulator for studying access-pattern leakage."
 requires-python = ">=3.10"
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
 
 [project.optional-dependencies]
 viz = [
@@ -13,3 +14,9 @@ viz = [
     "matplotlib>=3.8",
     "rich>=13.0",
 ]
+
+[project.scripts]
+oram-sim = "oram_sim.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
