@@ -8,6 +8,7 @@ from oram_sim.visualization import (
     format_tree,
     format_tree_with_highlighted_path,
     format_visible_block,
+    format_access_step
 )
 
 
@@ -106,4 +107,17 @@ def test_format_full_state() -> None:
     assert "highlighted leaf: 2" in text
     assert "private position map:" in text
     assert "private stash:" in text
+
+
+def test_format_access_step() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    step = next(oram.read_steps(2))
+
+    text = format_access_step(step)
+
+    assert "Before access" in text
+    assert "logical block: 2" in text
+    assert "old leaf:" in text
+    assert "touched path:" in text
     

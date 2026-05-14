@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from typing import TypeVar
 
 from oram_sim.block import Block, DummyBlock
-from oram_sim.path_oram import PathORAM
+from oram_sim.path_oram import AccessStep, PathORAM
 
 
 T = TypeVar("T")
@@ -208,3 +208,36 @@ def format_full_state(
             format_stash(oram, show_values=show_values),
         ]
     )
+
+def format_access_step(step: AccessStep[T]) -> str:
+    """
+    Format metadata for one stepped Path ORAM access phase.
+    """
+    phase_titles = {
+        "before_access": "Before access",
+        "after_path_read": "After path read into stash",
+        "after_remap": "After remapping target block",
+        "after_eviction": "After eviction/write-back",
+    }
+
+    lines = [
+        phase_titles[step.phase],
+        f"  logical block: {step.logical_id}",
+        f"  old leaf:      {step.old_leaf}",
+        f"  touched path:  {step.path}",
+    ]
+
+    if step.new_leaf is not None:
+        lines.append(f"  new leaf:      {step.new_leaf}")
+
+    if step.read_value is not None:
+        lines.append(f"  read value:    {step.read_value}")
+
+    lines.extend(
+        [
+            f"  stash size:    {step.stash_size}",
+            f"  trace so far:  {step.physical_trace or []}",
+        ]
+    )
+
+    return "\n".join(lines)

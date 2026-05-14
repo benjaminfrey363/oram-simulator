@@ -219,3 +219,66 @@ def test_visible_path_returns_padded_buckets() -> None:
 
     # Each bucket is padded to capacity 2.
     assert all(len(bucket) == 2 for bucket in visible_path)
+
+def test_read_steps_yields_expected_phases() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    steps = list(oram.read_steps(2))
+
+    assert [step.phase for step in steps] == [
+        "before_access",
+        "after_path_read",
+        "after_remap",
+        "after_eviction",
+    ]
+
+
+def test_read_steps_returns_read_value_in_steps() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    steps = list(oram.read_steps(2))
+
+    assert steps[-1].read_value == "c"
+
+
+def test_read_steps_preserves_invariant_after_completion() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    list(oram.read_steps(2))
+
+    assert oram.check_invariant()
+
+
+def test_read_steps_records_read_and_write_path_after_completion() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    old_leaf = oram.position_map.get_leaf(2)
+    expected_path = oram.server.path_bucket_indices(old_leaf)
+
+    steps = list(oram.read_steps(2))
+
+    assert steps[-1].physical_trace == expected_path + expected_path
+    assert oram.physical_trace() == expected_path + expected_path
+
+
+def test_write_steps_updates_value_after_completion() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    list(oram.write_steps(1, "new-b"))
+
+    assert oram.read(1) == "new-b"
+    assert oram.check_invariant()
+
+
+def test_after_path_read_step_has_path_read_trace_only() -> None:
+    oram = PathORAM(["a", "b", "c", "d"], bucket_capacity=2, seed=0)
+
+    old_leaf = oram.position_map.get_leaf(2)
+    expected_path = oram.server.path_bucket_indices(old_leaf)
+
+    steps = list(oram.read_steps(2))
+
+    after_path_read = steps[1]
+
+    assert after_path_read.phase == "after_path_read"
+    assert after_path_read.physical_trace == expected_path

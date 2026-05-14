@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
-from typing import Generic, TypeVar, cast
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
+from typing import Generic, Literal, TypeVar, cast
 
 from oram_sim.block import Block, DummyBlock
 from oram_sim.position_map import PositionMap
 from oram_sim.stash import Stash
 from oram_sim.tree import BinaryTreeServer, BucketFullError
 
+_NO_WRITE = object()
 
 T = TypeVar("T")
 
@@ -97,6 +99,30 @@ class PathORAM(Generic[T]):
         target block's value before writing back.
         """
         self._access(logical_id, new_value=value)
+
+    def read_steps(self, logical_id: int) -> Iterator[AccessStep[T]]:
+        """
+        Debugging version of read().
+
+        This yields the ORAM state after each phase of the access. The caller
+        should consume the generator to completion; otherwise the ORAM may be
+        left in an intermediate state.
+        """
+        yield from self._access_steps(logical_id, new_value=_NO_WRITE)
+
+    def write_steps(
+        self,
+        logical_id: int,
+        value: T,
+    ) -> Iterator[AccessStep[T]]:
+        """
+        Debugging version of write().
+
+        This yields the ORAM state after each phase of the access. The caller
+        should consume the generator to completion; otherwise the ORAM may be
+        left in an intermediate state.
+        """
+        yield from self._access_steps(logical_id, new_value=value)
 
     def position_entries(self) -> dict[int, int]:
         """
@@ -262,6 +288,80 @@ class PathORAM(Generic[T]):
         self._evict_to_path(old_leaf)
 
         return old_value
+    
+    def _access_steps(
+        self,
+        logical_id: int,
+        new_value: object,
+    ) -> Iterator[AccessStep[T]]:
+        """
+        Stepped/debugging version of the core Path ORAM access operation.
+
+        The normal _access() method performs the whole access at once. This
+        method pauses after each phase so demos can visualize the intermediate
+        state.
+        """
+        old_leaf = self.position_map.get_leaf(logical_id)
+        path = self.server.path_bucket_indices(old_leaf)
+
+        yield AccessStep(
+            phase="before_access",
+            logical_id=logical_id,
+            old_leaf=old_leaf,
+            path=path,
+            stash_size=len(self.stash),
+            physical_trace=self.physical_trace(),
+        )
+
+        new_leaf = self.position_map.remap(logical_id)
+
+        path_blocks = self.server.read_path_blocks(old_leaf)
+        self.stash.add_many(path_blocks)
+
+        target_block = self.stash.require(logical_id)
+        old_value = target_block.value
+
+        yield AccessStep(
+            phase="after_path_read",
+            logical_id=logical_id,
+            old_leaf=old_leaf,
+            new_leaf=new_leaf,
+            path=path,
+            read_value=old_value,
+            stash_size=len(self.stash),
+            physical_trace=self.physical_trace(),
+        )
+
+        updated_block = target_block.with_leaf(new_leaf)
+
+        if new_value is not _NO_WRITE:
+            updated_block = updated_block.with_value(cast(T, new_value))
+
+        self.stash.put(updated_block)
+
+        yield AccessStep(
+            phase="after_remap",
+            logical_id=logical_id,
+            old_leaf=old_leaf,
+            new_leaf=new_leaf,
+            path=path,
+            read_value=old_value,
+            stash_size=len(self.stash),
+            physical_trace=self.physical_trace(),
+        )
+
+        self._evict_to_path(old_leaf)
+
+        yield AccessStep(
+            phase="after_eviction",
+            logical_id=logical_id,
+            old_leaf=old_leaf,
+            new_leaf=new_leaf,
+            path=path,
+            read_value=old_value,
+            stash_size=len(self.stash),
+            physical_trace=self.physical_trace(),
+        )
 
     def _evict_to_path(self, leaf: int) -> None:
         """
@@ -352,3 +452,30 @@ class PathORAM(Generic[T]):
 
         return math.ceil(math.log2(n_blocks))
     
+    
+
+AccessPhase = Literal[
+    "before_access",
+    "after_path_read",
+    "after_remap",
+    "after_eviction",
+]
+
+
+@dataclass(frozen=True)
+class AccessStep(Generic[T]):
+    """
+    A debugging snapshot for one phase of a Path ORAM access.
+
+    This records metadata about the access phase. The ORAM object itself is
+    paused in the corresponding state while this step is yielded.
+    """
+
+    phase: AccessPhase
+    logical_id: int
+    old_leaf: int
+    path: list[int]
+    new_leaf: int | None = None
+    read_value: T | None = None
+    stash_size: int = 0
+    physical_trace: list[int] | None = None
