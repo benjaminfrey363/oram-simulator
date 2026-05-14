@@ -9,6 +9,7 @@ from oram_sim.path_oram import PathORAM
 from oram_sim.storage import NaiveStorage
 from oram_sim.snapshot import AccessPhase
 
+from oram_sim.workload import Read, WorkloadOperation, Write, format_operation
 
 T = TypeVar("T")
 
@@ -315,3 +316,333 @@ def format_stash_size_report(result: StashSizeWorkloadResult) -> str:
         )
 
     return "\n".join(lines)
+
+@dataclass(frozen=True)
+class MixedWorkloadSample(Generic[T]):
+    """
+    One phase sample from a mixed read/write Path ORAM workload.
+    """
+
+    query_index: int
+    operation: str
+    logical_id: int
+    phase: AccessPhase
+    stash_size: int
+    invariant_holds: bool
+    physical_trace_length: int
+    old_leaf: int
+    new_leaf: int | None
+    read_value: T | None
+
+
+@dataclass(frozen=True)
+class MixedWorkloadResult(Generic[T]):
+    """
+    Result of running a mixed read/write Path ORAM workload.
+    """
+
+    operations: list[str]
+    read_results: list[T]
+    samples: list[MixedWorkloadSample[T]]
+    physical_trace: list[int]
+    observed_leaves: list[int]
+    max_stash_size: int
+    final_stash_size: int
+    invariant_holds: bool
+
+
+def run_path_oram_mixed_workload(
+    initial_values: Sequence[T],
+    operations: Sequence[WorkloadOperation],
+    bucket_capacity: int = 4,
+    height: int | None = None,
+    seed: int | None = None,
+) -> MixedWorkloadResult[T]:
+    """
+    Run a mixed read/write workload against PathORAM.
+
+    Read operations contribute to read_results.
+    Write operations update the ORAM but do not contribute to read_results.
+
+    Both reads and writes produce the same server-visible ORAM access pattern:
+    one path read followed by one path write.
+    """
+    oram = PathORAM(
+        initial_values=initial_values,
+        bucket_capacity=bucket_capacity,
+        height=height,
+        seed=seed,
+    )
+
+    samples: list[MixedWorkloadSample[T]] = []
+    read_results: list[T] = []
+    observed_leaves: list[int] = []
+
+    for query_index, operation in enumerate(operations, start=1):
+        operation_label = format_operation(operation)
+
+        if isinstance(operation, Read):
+            snapshot_iterator = oram.read_snapshots(operation.logical_id)
+        elif isinstance(operation, Write):
+            snapshot_iterator = oram.write_snapshots(
+                operation.logical_id,
+                operation.value,
+            )
+        else:
+            raise TypeError(f"unsupported workload operation: {operation!r}")
+
+        snapshots = list(snapshot_iterator)
+
+        if len(snapshots) == 0:
+            raise RuntimeError("access produced no snapshots")
+
+        final_snapshot = snapshots[-1]
+        observed_leaves.append(final_snapshot.old_leaf)
+
+        if isinstance(operation, Read):
+            if final_snapshot.read_value is None:
+                raise RuntimeError("read operation produced no read value")
+            read_results.append(final_snapshot.read_value)
+
+        for snapshot in snapshots:
+            samples.append(
+                MixedWorkloadSample(
+                    query_index=query_index,
+                    operation=operation_label,
+                    logical_id=operation.logical_id,
+                    phase=snapshot.phase,
+                    stash_size=snapshot.stash_size,
+                    invariant_holds=snapshot.state.invariant_holds,
+                    physical_trace_length=len(snapshot.physical_trace),
+                    old_leaf=snapshot.old_leaf,
+                    new_leaf=snapshot.new_leaf,
+                    read_value=snapshot.read_value,
+                )
+            )
+
+    max_stash_size = max(
+        (sample.stash_size for sample in samples),
+        default=0,
+    )
+
+    return MixedWorkloadResult(
+        operations=[format_operation(operation) for operation in operations],
+        read_results=read_results,
+        samples=samples,
+        physical_trace=oram.physical_trace(),
+        observed_leaves=observed_leaves,
+        max_stash_size=max_stash_size,
+        final_stash_size=len(oram.stash_blocks()),
+        invariant_holds=oram.check_invariant(),
+    )
+
+
+def final_mixed_stash_sizes_by_query(
+    result: MixedWorkloadResult[T],
+) -> list[int]:
+    """
+    Return stash sizes after each completed mixed-workload operation.
+    """
+    return [
+        sample.stash_size
+        for sample in result.samples
+        if sample.phase == "after_eviction"
+    ]
+
+
+def format_mixed_workload_report(result: MixedWorkloadResult[T]) -> str:
+    """
+    Format a mixed workload result as a readable report.
+    """
+    lines = [
+        f"operations:           {result.operations}",
+        f"read results:         {result.read_results}",
+        f"observed leaves:      {result.observed_leaves}",
+        f"max stash size:       {result.max_stash_size}",
+        f"final stash size:     {result.final_stash_size}",
+        f"final invariant:      {result.invariant_holds}",
+        "",
+        (
+            "query  operation                 phase                 stash  "
+            "invariant  trace_len  old_leaf  new_leaf  read_value"
+        ),
+        "-" * 112,
+    ]
+
+    for sample in result.samples:
+        new_leaf = "-" if sample.new_leaf is None else str(sample.new_leaf)
+        read_value = "-" if sample.read_value is None else repr(sample.read_value)
+
+        lines.append(
+            f"{sample.query_index:>5}  "
+            f"{sample.operation:<24}  "
+            f"{sample.phase:<20}  "
+            f"{sample.stash_size:>5}  "
+            f"{str(sample.invariant_holds):>9}  "
+            f"{sample.physical_trace_length:>9}  "
+            f"{sample.old_leaf:>8}  "
+            f"{new_leaf:>8}  "
+            f"{read_value}"
+        )
+
+    return "\n".join(lines)
+
+@dataclass(frozen=True)
+class SeedTrialResult:
+    """
+    Result from one random seed in a stash-size experiment.
+    """
+
+    seed: int
+    operation_count: int
+    max_stash_size: int
+    final_stash_size: int
+    invariant_holds: bool
+
+
+@dataclass(frozen=True)
+class SeedSweepResult:
+    """
+    Result from running the same workload over many random seeds.
+    """
+
+    workload_name: str
+    trials: list[SeedTrialResult]
+
+    @property
+    def seeds(self) -> list[int]:
+        return [trial.seed for trial in self.trials]
+
+    @property
+    def max_stash_sizes(self) -> list[int]:
+        return [trial.max_stash_size for trial in self.trials]
+
+    @property
+    def final_stash_sizes(self) -> list[int]:
+        return [trial.final_stash_size for trial in self.trials]
+
+    @property
+    def all_invariants_hold(self) -> bool:
+        return all(trial.invariant_holds for trial in self.trials)
+
+    @property
+    def largest_observed_stash_size(self) -> int:
+        return max(self.max_stash_sizes, default=0)
+
+
+def run_path_oram_stash_size_seed_sweep(
+    initial_values: Sequence[T],
+    logical_pattern: Sequence[int],
+    seeds: Sequence[int],
+    workload_name: str = "read-only",
+    bucket_capacity: int = 4,
+    height: int | None = None,
+) -> SeedSweepResult:
+    """
+    Run the same read-only stash-size workload over many random seeds.
+    """
+    if len(seeds) == 0:
+        raise ValueError("seeds must be nonempty")
+
+    trials: list[SeedTrialResult] = []
+
+    for seed in seeds:
+        result = run_path_oram_stash_size_workload(
+            initial_values=initial_values,
+            logical_pattern=logical_pattern,
+            bucket_capacity=bucket_capacity,
+            height=height,
+            seed=seed,
+        )
+
+        trials.append(
+            SeedTrialResult(
+                seed=seed,
+                operation_count=len(logical_pattern),
+                max_stash_size=result.max_stash_size,
+                final_stash_size=result.final_stash_size,
+                invariant_holds=result.invariant_holds,
+            )
+        )
+
+    return SeedSweepResult(
+        workload_name=workload_name,
+        trials=trials,
+    )
+
+
+def run_path_oram_mixed_seed_sweep(
+    initial_values: Sequence[T],
+    operations: Sequence[WorkloadOperation],
+    seeds: Sequence[int],
+    workload_name: str = "mixed",
+    bucket_capacity: int = 4,
+    height: int | None = None,
+) -> SeedSweepResult:
+    """
+    Run the same mixed read/write workload over many random seeds.
+    """
+    if len(seeds) == 0:
+        raise ValueError("seeds must be nonempty")
+
+    trials: list[SeedTrialResult] = []
+
+    for seed in seeds:
+        result = run_path_oram_mixed_workload(
+            initial_values=initial_values,
+            operations=operations,
+            bucket_capacity=bucket_capacity,
+            height=height,
+            seed=seed,
+        )
+
+        trials.append(
+            SeedTrialResult(
+                seed=seed,
+                operation_count=len(operations),
+                max_stash_size=result.max_stash_size,
+                final_stash_size=result.final_stash_size,
+                invariant_holds=result.invariant_holds,
+            )
+        )
+
+    return SeedSweepResult(
+        workload_name=workload_name,
+        trials=trials,
+    )
+
+
+def format_seed_sweep_report(result: SeedSweepResult) -> str:
+    """
+    Format a seed-sweep result as a readable text report.
+    """
+    max_sizes = result.max_stash_sizes
+
+    average_max = (
+        sum(max_sizes) / len(max_sizes)
+        if max_sizes
+        else 0.0
+    )
+
+    lines = [
+        f"workload:                    {result.workload_name}",
+        f"number of seeds:             {len(result.trials)}",
+        f"all invariants hold:          {result.all_invariants_hold}",
+        f"largest observed stash size:  {result.largest_observed_stash_size}",
+        f"average max stash size:       {average_max:.2f}",
+        "",
+        "seed  operations  max_stash  final_stash  invariant",
+        "-" * 56,
+    ]
+
+    for trial in result.trials:
+        lines.append(
+            f"{trial.seed:>4}  "
+            f"{trial.operation_count:>10}  "
+            f"{trial.max_stash_size:>9}  "
+            f"{trial.final_stash_size:>11}  "
+            f"{str(trial.invariant_holds):>9}"
+        )
+
+    return "\n".join(lines)
+

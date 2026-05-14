@@ -9,8 +9,15 @@ from oram_sim.experiments import (
     format_stash_size_report,
     run_path_oram_stash_size_workload,
     samples_for_phase,
+    final_mixed_stash_sizes_by_query,
+    format_mixed_workload_report,
+    run_path_oram_mixed_workload,
+    format_seed_sweep_report,
+    run_path_oram_mixed_seed_sweep,
+    run_path_oram_stash_size_seed_sweep,
 )
 
+from oram_sim.workload import Read, Write
 
 def test_chunk_trace() -> None:
     assert chunk_trace([1, 2, 3, 4, 5, 6], chunk_size=2) == [
@@ -206,3 +213,189 @@ def test_format_stash_size_report() -> None:
     assert "max stash size:" in report
     assert "after_path_read" in report
     assert "after_eviction" in report
+
+def test_run_path_oram_mixed_workload_records_all_phases() -> None:
+    result = run_path_oram_mixed_workload(
+        initial_values=["a", "b", "c", "d"],
+        operations=[
+            Read(2),
+            Write(1, "new-b"),
+            Read(1),
+        ],
+        bucket_capacity=2,
+        height=2,
+        seed=0,
+    )
+
+    assert len(result.samples) == 12
+
+    assert [sample.phase for sample in result.samples[:4]] == [
+        "before_access",
+        "after_path_read",
+        "after_remap",
+        "after_eviction",
+    ]
+
+    assert result.invariant_holds
+
+
+def test_run_path_oram_mixed_workload_returns_read_results() -> None:
+    result = run_path_oram_mixed_workload(
+        initial_values=["a", "b", "c", "d"],
+        operations=[
+            Read(2),
+            Write(1, "new-b"),
+            Read(1),
+        ],
+        bucket_capacity=2,
+        height=2,
+        seed=0,
+    )
+
+    assert result.read_results == ["c", "new-b"]
+
+
+def test_run_path_oram_mixed_workload_records_operations() -> None:
+    result = run_path_oram_mixed_workload(
+        initial_values=["a", "b"],
+        operations=[
+            Read(0),
+            Write(1, "new-b"),
+        ],
+        bucket_capacity=2,
+        height=1,
+        seed=0,
+    )
+
+    assert result.operations == [
+        "read(0)",
+        "write(1, 'new-b')",
+    ]
+
+
+def test_run_path_oram_mixed_workload_records_observed_leaves() -> None:
+    result = run_path_oram_mixed_workload(
+        initial_values=["a", "b", "c", "d"],
+        operations=[
+            Read(2),
+            Write(1, "new-b"),
+            Read(1),
+        ],
+        bucket_capacity=2,
+        height=2,
+        seed=0,
+    )
+
+    assert len(result.observed_leaves) == 3
+    assert all(0 <= leaf < 4 for leaf in result.observed_leaves)
+
+
+def test_final_mixed_stash_sizes_by_query() -> None:
+    result = run_path_oram_mixed_workload(
+        initial_values=["a", "b", "c", "d"],
+        operations=[
+            Read(2),
+            Write(1, "new-b"),
+            Read(1),
+        ],
+        bucket_capacity=2,
+        height=2,
+        seed=0,
+    )
+
+    sizes = final_mixed_stash_sizes_by_query(result)
+
+    assert len(sizes) == 3
+    assert sizes == [
+        sample.stash_size
+        for sample in result.samples
+        if sample.phase == "after_eviction"
+    ]
+
+
+def test_format_mixed_workload_report() -> None:
+    result = run_path_oram_mixed_workload(
+        initial_values=["a", "b"],
+        operations=[
+            Read(0),
+            Write(1, "new-b"),
+            Read(1),
+        ],
+        bucket_capacity=2,
+        height=1,
+        seed=0,
+    )
+
+    report = format_mixed_workload_report(result)
+
+    assert "operations:" in report
+    assert "read results:" in report
+    assert "observed leaves:" in report
+    assert "write(1, 'new-b')" in report
+    assert "new-b" in report
+
+def test_run_path_oram_stash_size_seed_sweep() -> None:
+    result = run_path_oram_stash_size_seed_sweep(
+        initial_values=["a", "b", "c", "d"],
+        logical_pattern=[2, 2, 3],
+        seeds=[0, 1, 2],
+        workload_name="test read-only",
+        bucket_capacity=2,
+        height=2,
+    )
+
+    assert result.workload_name == "test read-only"
+    assert result.seeds == [0, 1, 2]
+    assert len(result.trials) == 3
+    assert all(trial.operation_count == 3 for trial in result.trials)
+    assert result.all_invariants_hold
+
+
+def test_run_path_oram_stash_size_seed_sweep_rejects_empty_seeds() -> None:
+    with pytest.raises(ValueError):
+        run_path_oram_stash_size_seed_sweep(
+            initial_values=["a", "b", "c", "d"],
+            logical_pattern=[2, 2, 3],
+            seeds=[],
+            bucket_capacity=2,
+            height=2,
+        )
+
+
+def test_run_path_oram_mixed_seed_sweep() -> None:
+    result = run_path_oram_mixed_seed_sweep(
+        initial_values=["a", "b", "c", "d"],
+        operations=[
+            Read(2),
+            Write(1, "new-b"),
+            Read(1),
+        ],
+        seeds=[0, 1, 2],
+        workload_name="test mixed",
+        bucket_capacity=2,
+        height=2,
+    )
+
+    assert result.workload_name == "test mixed"
+    assert result.seeds == [0, 1, 2]
+    assert len(result.trials) == 3
+    assert all(trial.operation_count == 3 for trial in result.trials)
+    assert result.all_invariants_hold
+
+
+def test_format_seed_sweep_report() -> None:
+    result = run_path_oram_stash_size_seed_sweep(
+        initial_values=["a", "b", "c", "d"],
+        logical_pattern=[2, 2, 3],
+        seeds=[0, 1],
+        workload_name="test report",
+        bucket_capacity=2,
+        height=2,
+    )
+
+    report = format_seed_sweep_report(result)
+
+    assert "workload:" in report
+    assert "number of seeds:" in report
+    assert "largest observed stash size:" in report
+    assert "test report" in report
