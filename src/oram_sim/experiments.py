@@ -7,6 +7,7 @@ from typing import Generic, TypeVar
 from oram_sim.analysis import TraceSummary, summarize_physical_trace
 from oram_sim.path_oram import PathORAM
 from oram_sim.storage import NaiveStorage
+from oram_sim.snapshot import AccessPhase
 
 
 T = TypeVar("T")
@@ -166,3 +167,151 @@ def observed_leaves_from_grouped_trace(
         observed_leaves.append(leaf)
 
     return observed_leaves
+
+@dataclass(frozen=True)
+class StashSizeSample:
+    """
+    One stash-size measurement during a Path ORAM workload.
+
+    query_index:
+        One-based index of the logical query in the workload.
+
+    phase:
+        The access phase at which the measurement was taken.
+
+    stash_size:
+        Number of real blocks in the private stash at this phase.
+    """
+
+    query_index: int
+    logical_id: int
+    phase: AccessPhase
+    stash_size: int
+    invariant_holds: bool
+    physical_trace_length: int
+    old_leaf: int
+    new_leaf: int | None
+
+
+@dataclass(frozen=True)
+class StashSizeWorkloadResult:
+    """
+    Stash-size measurements for a read-only Path ORAM workload.
+    """
+
+    logical_pattern: list[int]
+    samples: list[StashSizeSample]
+    max_stash_size: int
+    final_stash_size: int
+    invariant_holds: bool
+
+
+def run_path_oram_stash_size_workload(
+    initial_values: Sequence[T],
+    logical_pattern: Sequence[int],
+    bucket_capacity: int = 4,
+    height: int | None = None,
+    seed: int | None = None,
+) -> StashSizeWorkloadResult:
+    """
+    Run a read-only workload and record stash size after every access phase.
+    """
+    oram = PathORAM(
+        initial_values=initial_values,
+        bucket_capacity=bucket_capacity,
+        height=height,
+        seed=seed,
+    )
+
+    samples: list[StashSizeSample] = []
+
+    for query_index, logical_id in enumerate(logical_pattern, start=1):
+        for snapshot in oram.read_snapshots(logical_id):
+            samples.append(
+                StashSizeSample(
+                    query_index=query_index,
+                    logical_id=logical_id,
+                    phase=snapshot.phase,
+                    stash_size=snapshot.stash_size,
+                    invariant_holds=snapshot.state.invariant_holds,
+                    physical_trace_length=len(snapshot.physical_trace),
+                    old_leaf=snapshot.old_leaf,
+                    new_leaf=snapshot.new_leaf,
+                )
+            )
+
+    max_stash_size = max(
+        (sample.stash_size for sample in samples),
+        default=0,
+    )
+
+    return StashSizeWorkloadResult(
+        logical_pattern=list(logical_pattern),
+        samples=samples,
+        max_stash_size=max_stash_size,
+        final_stash_size=len(oram.stash_blocks()),
+        invariant_holds=oram.check_invariant(),
+    )
+
+
+def samples_for_phase(
+    result: StashSizeWorkloadResult,
+    phase: AccessPhase,
+) -> list[StashSizeSample]:
+    """
+    Return the stash-size samples from one phase.
+    """
+    return [
+        sample
+        for sample in result.samples
+        if sample.phase == phase
+    ]
+
+
+def final_stash_sizes_by_query(
+    result: StashSizeWorkloadResult,
+) -> list[int]:
+    """
+    Return stash sizes after each completed access.
+
+    This uses the after_eviction phase, since that is the final phase of a
+    Path ORAM access.
+    """
+    return [
+        sample.stash_size
+        for sample in samples_for_phase(result, "after_eviction")
+    ]
+
+
+def format_stash_size_report(result: StashSizeWorkloadResult) -> str:
+    """
+    Format stash-size measurements as a readable text report.
+    """
+    lines = [
+        f"logical workload:      {result.logical_pattern}",
+        f"max stash size:       {result.max_stash_size}",
+        f"final stash size:     {result.final_stash_size}",
+        f"final invariant:      {result.invariant_holds}",
+        "",
+        (
+            "query  logical  phase                 stash  invariant  "
+            "trace_len  old_leaf  new_leaf"
+        ),
+        "-" * 84,
+    ]
+
+    for sample in result.samples:
+        new_leaf = "-" if sample.new_leaf is None else str(sample.new_leaf)
+
+        lines.append(
+            f"{sample.query_index:>5}  "
+            f"{sample.logical_id:>7}  "
+            f"{sample.phase:<20}  "
+            f"{sample.stash_size:>5}  "
+            f"{str(sample.invariant_holds):>9}  "
+            f"{sample.physical_trace_length:>9}  "
+            f"{sample.old_leaf:>8}  "
+            f"{new_leaf:>8}"
+        )
+
+    return "\n".join(lines)
