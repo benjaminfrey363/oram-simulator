@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import argparse
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
+from rich.text import Text
 
 from oram_sim.path_oram import PathORAM
 from oram_sim.rich_renderer import rich_access_snapshot, rich_state_snapshot
-from oram_sim.workload import Read, WorkloadOperation, Write, format_operation
+from oram_sim.viewer import (
+    ViewerFrame,
+    build_viewer_frames,
+    parse_viewer_command,
+    viewer_help_text,
+)
 from oram_sim.workload_profiles import (
     WorkloadMode,
     build_workload_profile,
@@ -94,59 +100,96 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-clear",
         action="store_true",
-        help="Do not clear the terminal between phases.",
+        help="Do not clear the terminal between frames.",
     )
 
     return parser
 
 
-def wait_for_enter(console: Console, message: str = "Press Enter to continue...") -> None:
-    console.print()
-    console.input(f"[bold bright_black]{message}[/bold bright_black]")
+def render_frame(
+    frame: ViewerFrame[str],
+    show_values: bool,
+):
+    if frame.kind == "profile":
+        return Panel(
+            frame.profile_text or "",
+            title="Workload profile",
+            border_style="cyan",
+        )
+
+    if frame.kind == "state":
+        if frame.state_snapshot is None:
+            raise RuntimeError("state frame is missing state_snapshot")
+
+        return rich_state_snapshot(
+            frame.state_snapshot,
+            show_values=show_values,
+        )
+
+    if frame.kind == "access":
+        if frame.access_snapshot is None:
+            raise RuntimeError("access frame is missing access_snapshot")
+
+        renderable = rich_access_snapshot(
+            frame.access_snapshot,
+            show_values=show_values,
+        )
+
+        if frame.note is None:
+            return renderable
+
+        return Group(
+            renderable,
+            Text(""),
+            Panel(
+                Text(frame.note),
+                title="Note",
+                border_style="yellow",
+            ),
+        )
+
+    raise RuntimeError(f"unsupported frame kind: {frame.kind}")
 
 
 def render_screen(
     console: Console,
-    title: str,
-    renderable,
-    clear: bool = True,
+    frame: ViewerFrame[str],
+    frame_index: int,
+    frame_count: int,
+    show_values: bool,
+    clear: bool,
 ) -> None:
     if clear:
         console.clear()
 
-    console.rule(f"[bold]{title}[/bold]")
+    values_text = "on" if show_values else "off"
+
+    console.rule(
+        f"[bold]{frame.title}[/bold] "
+        f"[bright_black]({frame_index + 1}/{frame_count}, values {values_text})[/bright_black]"
+    )
     console.print()
-    console.print(renderable)
-
-
-def render_profile_summary(
-    console: Console,
-    profile_text: str,
-    clear: bool,
-) -> None:
-    render_screen(
-        console,
-        title="Path ORAM interactive viewer",
-        renderable=Panel(
-            profile_text,
-            title="Workload profile",
-            border_style="cyan",
-        ),
-        clear=clear,
+    console.print(render_frame(frame, show_values=show_values))
+    console.print()
+    console.print(
+        "[bright_black]Controls: Enter/n next · b previous · v toggle values · "
+        "h help · q quit[/bright_black]"
     )
 
 
-def run_operation_snapshots(
-    oram: PathORAM[str],
-    operation: WorkloadOperation,
-):
-    if isinstance(operation, Read):
-        return oram.read_snapshots(operation.logical_id)
+def prompt_command(console: Console) -> str:
+    return console.input("[bold bright_black]> [/bold bright_black]")
 
-    if isinstance(operation, Write):
-        return oram.write_snapshots(operation.logical_id, operation.value)
 
-    raise TypeError(f"Unsupported operation: {operation!r}")
+def show_help(console: Console, clear: bool) -> None:
+    if clear:
+        console.clear()
+
+    console.rule("[bold]Help[/bold]")
+    console.print()
+    console.print(Panel(viewer_help_text(), title="Interactive controls"))
+    console.print()
+    console.input("[bold bright_black]Press Enter to return...[/bold bright_black]")
 
 
 def main() -> None:
@@ -175,69 +218,50 @@ def main() -> None:
         seed=args.seed,
     )
 
-    clear = not args.no_clear
-
-    render_profile_summary(
-        console,
+    frames = build_viewer_frames(
+        oram=oram,
+        operations=profile.operations,
         profile_text=format_workload_profile(profile),
-        clear=clear,
-    )
-    wait_for_enter(console)
-
-    render_screen(
-        console,
-        title="Initial Path ORAM state",
-        renderable=rich_state_snapshot(
-            oram.state_snapshot(),
-            show_values=args.show_values,
-        ),
-        clear=clear,
-    )
-    wait_for_enter(console)
-
-    for query_index, operation in enumerate(profile.operations, start=1):
-        operation_label = format_operation(operation)
-
-        for snapshot in run_operation_snapshots(oram, operation):
-            render_screen(
-                console,
-                title=f"Query {query_index}/{profile.operation_count}: {operation_label}",
-                renderable=rich_access_snapshot(
-                    snapshot,
-                    show_values=args.show_values,
-                ),
-                clear=clear,
-            )
-
-            if snapshot.phase == "after_path_read":
-                console.print()
-                console.print(
-                    "[yellow]Debug note:[/yellow] path blocks have been copied "
-                    "into the stash, but the server path has not yet been "
-                    "rewritten. The placement invariant can be temporarily false."
-                )
-
-            if snapshot.phase == "after_remap":
-                console.print()
-                console.print(
-                    "[magenta]Debug note:[/magenta] the target block now has its "
-                    "new leaf assignment in the stash. Eviction has not happened yet."
-                )
-
-            wait_for_enter(console)
-
-    render_screen(
-        console,
-        title="Final Path ORAM state",
-        renderable=rich_state_snapshot(
-            oram.state_snapshot(),
-            show_values=args.show_values,
-        ),
-        clear=clear,
     )
 
-    console.print()
-    console.print("[bold green]Done.[/bold green]")
+    clear = not args.no_clear
+    show_values = bool(args.show_values)
+    frame_index = 0
+
+    while True:
+        render_screen(
+            console=console,
+            frame=frames[frame_index],
+            frame_index=frame_index,
+            frame_count=len(frames),
+            show_values=show_values,
+            clear=clear,
+        )
+
+        command = parse_viewer_command(prompt_command(console))
+
+        if command == "next":
+            if frame_index < len(frames) - 1:
+                frame_index += 1
+            continue
+
+        if command == "previous":
+            if frame_index > 0:
+                frame_index -= 1
+            continue
+
+        if command == "toggle_values":
+            show_values = not show_values
+            continue
+
+        if command == "help":
+            show_help(console, clear=clear)
+            continue
+
+        if command == "quit":
+            break
+
+        console.print("[red]Unknown command. Press h for help.[/red]")
 
 
 if __name__ == "__main__":
