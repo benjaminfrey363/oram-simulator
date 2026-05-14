@@ -81,4 +81,25 @@ oram-simulator/
     test_stash.py
     test_storage.py
     test_tree.py
-    
+
+
+## Graphviz snapshot visualizations
+
+The simulator can also generate graphical snapshots of the Path ORAM tree during an access.
+
+Each logical access is split into four phases:
+
+1. before access,
+2. after path read into stash,
+3. after remapping the target block,
+4. after eviction/write-back.
+
+The Graphviz renderer consumes `AccessSnapshot` objects, so it is separated from the core ORAM logic.
+
+### Install visualization dependencies
+
+On macOS:
+
+```bash
+brew install graphviz
+python3 -m pip install graphviz
