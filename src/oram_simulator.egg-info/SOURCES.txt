@@ -31,6 +31,7 @@ src/oram_simulator.egg-info/top_level.txt
 tests/test_access_patterns.py
 tests/test_analysis.py
 tests/test_block.py
+tests/test_cli.py
 tests/test_comparison.py
 tests/test_experiments.py
 tests/test_graphviz_renderer.py
