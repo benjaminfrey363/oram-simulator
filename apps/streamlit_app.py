@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import Any, Sequence, cast
 
 import streamlit as st
@@ -17,6 +18,67 @@ from oram_sim.workload_profiles import (
 
 
 WORKLOAD_MODES = ["repeated", "sequential", "random", "hotspot", "mixed"]
+
+
+
+def initialize_navigation_state(frame_count: int, show_values_default: bool) -> None:
+    """
+    Ensure Streamlit session state has the navigation keys we need.
+
+    frame_index is the single source of truth for playback. The frame slider
+    is deliberately left unkeyed, so it cannot conflict with session_state
+    during autoplay.
+    """
+    if "frame_index" not in st.session_state:
+        st.session_state.frame_index = 0
+
+    if "show_values" not in st.session_state:
+        st.session_state.show_values = show_values_default
+
+    if "autoplay" not in st.session_state:
+        st.session_state.autoplay = False
+
+    st.session_state.frame_index = clamp_frame_index(
+        int(st.session_state.frame_index),
+        frame_count,
+    )
+
+
+def clamp_frame_index(index: int, frame_count: int) -> int:
+    if frame_count <= 0:
+        return 0
+
+    return max(0, min(frame_count - 1, index))
+
+
+def set_frame_index(index: int, frame_count: int) -> None:
+    """Set the current frame index."""
+    st.session_state.frame_index = clamp_frame_index(index, frame_count)
+
+
+def go_to_previous_frame(frame_count: int) -> None:
+    set_frame_index(int(st.session_state.frame_index) - 1, frame_count)
+
+
+def go_to_next_frame(frame_count: int) -> None:
+    set_frame_index(int(st.session_state.frame_index) + 1, frame_count)
+
+
+def go_to_first_frame() -> None:
+    set_frame_index(0, frame_count=1_000_000)
+
+
+def go_to_last_frame(frame_count: int) -> None:
+    set_frame_index(frame_count - 1, frame_count)
+
+
+def toggle_values() -> None:
+    st.session_state.show_values = not bool(st.session_state.show_values)
+
+
+def toggle_autoplay() -> None:
+    st.session_state.autoplay = not bool(st.session_state.autoplay)
+
 
 
 def main() -> None:
@@ -59,12 +121,16 @@ def main() -> None:
         settings["hot_probability"],
     )
 
-    if (
+    should_rebuild = (
         "frames" not in st.session_state
         or st.session_state.get("signature") != signature
-        or st.sidebar.button("Build / reset simulation")
-    ):
-        frames = build_frames(
+    )
+
+    if st.sidebar.button("Build / reset simulation"):
+        should_rebuild = True
+
+    if should_rebuild:
+        new_frames = build_frames(
             viewer_kind=settings["viewer_kind"],
             profile=profile,
             n_blocks=settings["n_blocks"],
@@ -73,16 +139,22 @@ def main() -> None:
             seed=settings["seed"],
         )
 
-        st.session_state.frames = frames
+        st.session_state.frames = new_frames
         st.session_state.frame_index = 0
         st.session_state.signature = signature
         st.session_state.show_values = bool(settings["show_values"])
+        st.session_state.autoplay = False
 
     frames = cast(list[Any], st.session_state.frames)
 
     if not frames:
         st.warning("No frames to display.")
         return
+    
+    initialize_navigation_state(
+        frame_count=len(frames),
+        show_values_default=bool(settings["show_values"]),
+    )
 
     render_navigation(frame_count=len(frames))
 
@@ -104,6 +176,9 @@ def main() -> None:
             cast(ComparisonFrame[str], frame),
             show_values=show_values,
         )
+
+    maybe_advance_autoplay(frame_count=len(frames))
+
 
 
 def sidebar_settings() -> dict[str, Any]:
@@ -265,29 +340,79 @@ def build_frames(
 
 
 def render_navigation(frame_count: int) -> None:
-    previous_col, next_col, reset_col, values_col = st.columns(4)
+    st.markdown("### Playback controls")
+
+    previous_col, next_col, first_col, last_col, values_col, autoplay_col = st.columns(6)
 
     with previous_col:
-        if st.button("Previous", use_container_width=True):
-            st.session_state.frame_index = max(
-                0,
-                int(st.session_state.frame_index) - 1,
-            )
+        st.button(
+            "Previous",
+            use_container_width=True,
+            on_click=go_to_previous_frame,
+            args=(frame_count,),
+        )
 
     with next_col:
-        if st.button("Next", use_container_width=True):
-            st.session_state.frame_index = min(
-                frame_count - 1,
-                int(st.session_state.frame_index) + 1,
-            )
+        st.button(
+            "Next",
+            use_container_width=True,
+            on_click=go_to_next_frame,
+            args=(frame_count,),
+        )
 
-    with reset_col:
-        if st.button("Reset to first frame", use_container_width=True):
-            st.session_state.frame_index = 0
+    with first_col:
+        st.button(
+            "First",
+            use_container_width=True,
+            on_click=go_to_first_frame,
+        )
+
+    with last_col:
+        st.button(
+            "Last",
+            use_container_width=True,
+            on_click=go_to_last_frame,
+            args=(frame_count,),
+        )
 
     with values_col:
-        if st.button("Toggle values", use_container_width=True):
-            st.session_state.show_values = not bool(st.session_state.show_values)
+        st.button(
+            "Toggle values",
+            use_container_width=True,
+            on_click=toggle_values,
+        )
+
+    with autoplay_col:
+        autoplay_label = "Pause" if st.session_state.autoplay else "Play"
+        st.button(
+            autoplay_label,
+            use_container_width=True,
+            on_click=toggle_autoplay,
+        )
+
+    if frame_count > 1:
+        selected_frame = st.slider(
+            "Frame",
+            min_value=0,
+            max_value=frame_count - 1,
+            value=int(st.session_state.frame_index),
+            step=1,
+            format="%d",
+        )
+        st.session_state.frame_index = int(selected_frame)
+    else:
+        st.caption("Only one frame is available.")
+
+    delay = st.slider(
+        "Autoplay delay",
+        min_value=0.1,
+        max_value=3.0,
+        value=0.8,
+        step=0.1,
+        help="Seconds between frames while autoplay is enabled.",
+    )
+
+    st.session_state.autoplay_delay = delay
 
 
 def render_path_frame(frame: ViewerFrame[str], show_values: bool) -> None:
@@ -470,6 +595,9 @@ def render_access_snapshot(
             )
         )
 
+        st.markdown("### Server-visible physical trace so far")
+        st.code(str(list(snapshot.physical_trace)))
+
     with graph_col:
         dot = access_snapshot_to_dot(
             snapshot,
@@ -477,6 +605,8 @@ def render_access_snapshot(
             show_dummy_ids=False,
         )
         st.graphviz_chart(dot)
+        st.caption("Server-visible physical trace for this frame")
+        st.code(str(list(snapshot.physical_trace)))
 
     render_state_tables(snapshot.state, show_values=show_values)
 
@@ -554,6 +684,31 @@ def table_rows(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
         {key: str(value) for key, value in row.items()}
         for row in rows
     ]
+
+
+def maybe_advance_autoplay(frame_count: int) -> None:
+    """
+    Advance the frame automatically if autoplay is enabled.
+
+    This uses a short sleep followed by st.rerun(). It is intentionally simple:
+    the full app reruns, but our simulation frames are already cached in
+    session_state, so the UI remains responsive for small/medium examples.
+    """
+    if not bool(st.session_state.get("autoplay", False)):
+        return
+
+    current_index = int(st.session_state.frame_index)
+
+    if current_index >= frame_count - 1:
+        st.session_state.autoplay = False
+        return
+
+    delay = float(st.session_state.get("autoplay_delay", 0.8))
+    time.sleep(delay)
+
+    st.session_state.frame_index = current_index + 1
+
+    st.rerun()
 
 
 if __name__ == "__main__":
